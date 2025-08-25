@@ -117,7 +117,7 @@ fn makeSQLiteLib(b: *std.Build, dep: *std.Build.Dependency, c_flags: []const []c
     });
     const lib = b.addLibrary(.{
         .name = "sqlite",
-        .linkage = .dynamic,
+        //.linkage = .dynamic,
         .root_module = mod,
     });
 
