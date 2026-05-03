@@ -15,7 +15,7 @@ If you use this library, expect to have to make changes when you update the code
 
 `zig-sqlite` follows Zig's release structure:
 - [master](https://github.com/vrischmann/zig-sqlite) tracks Zig master
-- [zig-0.14.0](https://github.com/vrischmann/zig-sqlite/tree/zig-0.14.0) tracks Zig 0.14.0
+- [zig-0.15.1](https://github.com/vrischmann/zig-sqlite/tree/zig-0.15.1) tracks Zig 0.15.1
 
 The plan is to support releases once Zig 1.0 is released but this can still change.
 
@@ -235,7 +235,6 @@ const row = try stmt.one(
 if (row) |r| {
     const name_ptr: [*:0]const u8 = &r.name;
     std.log.debug("name: {s}, age: {}", .{ std.mem.span(name_ptr), r.age });
-}
 }
 ```
 Notice that to read text we need to use a 0-terminated array; if the `name` column is bigger than 127 bytes the call to `one` will fail.
