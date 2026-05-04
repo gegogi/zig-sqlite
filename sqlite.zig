@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const debug = std.debug;
 const heap = std.heap;
-const io = std.io;
 const mem = std.mem;
 const testing = std.testing;
 
@@ -132,14 +131,30 @@ pub const Blob = struct {
         }
     }
 
-    pub const Reader = io.GenericReader(*Self, errors.Error, read);
+    pub const Reader = struct {
+        blob: *Blob,
 
-    /// reader returns a io.Reader.
+        pub fn readAllAlloc(self: Reader, allocator: mem.Allocator, max_size: usize) (Error || mem.Allocator.Error)![]u8 {
+            const remaining: usize = @as(usize, @intCast(self.blob.size)) - @as(usize, @intCast(self.blob.offset));
+            const size = @min(remaining, max_size);
+            const buf = try allocator.alloc(u8, size);
+            errdefer allocator.free(buf);
+            var pos: usize = 0;
+            while (pos < buf.len) {
+                const n = try self.blob.readFn(buf[pos..]);
+                if (n == 0) break;
+                pos += n;
+            }
+            return buf[0..pos];
+        }
+    };
+
+    /// reader returns a Reader for incremental blob reading.
     pub fn reader(self: *Self) Reader {
-        return .{ .context = self };
+        return .{ .blob = self };
     }
 
-    fn read(self: *Self, buffer: []u8) Error!usize {
+    fn readFn(self: *Self, buffer: []u8) Error!usize {
         if (self.offset >= self.size) {
             return 0;
         }
@@ -164,14 +179,24 @@ pub const Blob = struct {
         return tmp_buffer.len;
     }
 
-    pub const Writer = io.GenericWriter(*Self, Error, write);
+    pub const Writer = struct {
+        blob: *Blob,
 
-    /// writer returns a io.Writer.
+        pub fn writeAll(self: Writer, data: []const u8) Error!void {
+            var pos: usize = 0;
+            while (pos < data.len) {
+                const n = try self.blob.writeFn(data[pos..]);
+                pos += n;
+            }
+        }
+    };
+
+    /// writer returns a Writer for incremental blob writing.
     pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
+        return .{ .blob = self };
     }
 
-    fn write(self: *Self, data: []const u8) Error!usize {
+    fn writeFn(self: *Self, data: []const u8) Error!usize {
         const result = c.sqlite3_blob_write(
             self.handle,
             data.ptr,
@@ -1470,7 +1495,7 @@ pub fn Iterator(comptime Type: type) type {
                     },
                     inline .@"struct", .@"union" => |TI| {
                         if (TI.layout == .@"packed" and !@hasField(FieldType, "readField")) {
-                            const Backing = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(FieldType) } });
+                            const Backing = @Int(.unsigned, @bitSizeOf(FieldType));
                             return @bitCast(self.readInt(Backing, i));
                         }
 
@@ -1701,7 +1726,7 @@ pub const DynamicStatement = struct {
                 },
                 .@"union" => |info| {
                     if (info.layout == .@"packed") {
-                        const Backing = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(FieldType) } });
+                        const Backing = @Int(.unsigned, @bitSizeOf(FieldType));
                         try self.bindField(Backing, options, field_name, i, @as(Backing, @bitCast(field)));
                         return;
                     }
@@ -1967,7 +1992,7 @@ pub const DynamicStatement = struct {
     pub fn all(self: *Self, comptime Type: type, allocator: mem.Allocator, options: QueryOptions, values: anytype) ![]Type {
         var iter = try self.iteratorAlloc(Type, allocator, values);
 
-        var rows: std.ArrayList(Type) = .{};
+        var rows: std.ArrayList(Type) = .empty;
         while (try iter.nextAlloc(allocator, options)) |row| {
             try rows.append(allocator, row);
         }
@@ -2257,7 +2282,7 @@ pub fn Statement(comptime opts: StatementOptions, comptime query: anytype) type 
         pub fn all(self: *Self, comptime Type: type, allocator: mem.Allocator, options: QueryOptions, values: anytype) ![]Type {
             var iter = try self.iteratorAlloc(Type, allocator, values);
 
-            var rows: std.ArrayList(Type) = .{};
+            var rows: std.ArrayList(Type) = .empty;
             while (try iter.nextAlloc(allocator, options)) |row| {
                 try rows.append(allocator, row);
             }
@@ -3020,7 +3045,7 @@ test "sqlite: statement iterator" {
     var stmt = try db.prepare("INSERT INTO user(name, id, age, weight, favorite_color) VALUES(?{[]const u8}, ?{usize}, ?{usize}, ?{f32}, ?{[]const u8})");
     defer stmt.deinit();
 
-    var expected_rows: std.ArrayList(TestUser) = .{};
+    var expected_rows: std.ArrayList(TestUser) = .empty;
     var i: usize = 0;
     while (i < 20) : (i += 1) {
         const name = try std.fmt.allocPrint(allocator, "Vincent {d}", .{i});
@@ -3047,7 +3072,7 @@ test "sqlite: statement iterator" {
 
         var iter = try stmt2.iterator(RowType, .{});
 
-        var rows: std.ArrayList(RowType) = .{};
+        var rows: std.ArrayList(RowType) = .empty;
         while (try iter.next(.{})) |row| {
             try rows.append(allocator, row);
         }
@@ -3074,7 +3099,7 @@ test "sqlite: statement iterator" {
 
         var iter = try stmt2.iterator(RowType, .{});
 
-        var rows: std.ArrayList(RowType) = .{};
+        var rows: std.ArrayList(RowType) = .empty;
         while (try iter.nextAlloc(allocator, .{})) |row| {
             try rows.append(allocator, row);
         }
@@ -3459,7 +3484,7 @@ test "sqlite: bind runtime slice" {
     const allocator = arena.allocator();
 
     // creating array list on heap so that it's deemed runtime size
-    var list: std.ArrayList([]const u8) = .{};
+    var list: std.ArrayList([]const u8) = .empty;
     defer list.deinit(allocator);
     try list.append(allocator, "this is some data");
     const args = try list.toOwnedSlice(allocator);
@@ -3749,7 +3774,7 @@ test "sqlite: create aggregate function with no aggregate context" {
     var db = try getTestDb();
     defer db.deinit();
 
-    var rand = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var rand = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     // Create an aggregate function working with a MyContext
 
@@ -3810,7 +3835,7 @@ test "sqlite: create aggregate function with an aggregate context" {
     var db = try getTestDb();
     defer db.deinit();
 
-    var rand = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var rand = std.Random.DefaultPrng.init(std.testing.random_seed);
 
     try db.createAggregateFunction(
         "mySum",
@@ -3877,7 +3902,7 @@ test "sqlite: empty slice" {
     defer db.deinit();
     try addTestData(&db);
 
-    var list: std.ArrayList(u8) = .{};
+    var list: std.ArrayList(u8) = .empty;
     const ptr = try list.toOwnedSlice(allocator);
 
     try db.exec("INSERT INTO article(author_id, data) VALUES(?, ?)", .{}, .{ 1, ptr });
@@ -4054,7 +4079,8 @@ test "reuse same field twice in query string" {
 
 test "fuzzing" {
     const Context = struct {
-        fn testOne(_: @This(), input: []const u8) anyerror!void {
+        fn testOne(_: @This(), smith: *testing.Smith) anyerror!void {
+            const input = smith.in orelse &.{};
             var db = try Db.init(.{
                 .mode = .Memory,
                 .open_flags = .{

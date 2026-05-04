@@ -35,8 +35,13 @@ pub fn ParsedQuery(comptime tmp_query: []const u8) type {
 
         pub const bind_markers = result.bind_markers[0..result.bind_markers_len];
 
+        // Store query string separately from bind_markers to avoid the comptime-only
+        // ?type field in BindMarker causing runtime access issues (Zig 0.16+).
+        const query_data: [tmp_query.len]u8 = result.query;
+        const query_len: usize = result.query_len;
+
         pub fn getQuery() []const u8 {
-            return Self.result.query[0..Self.result.query_len];
+            return query_data[0..query_len];
         }
 
         const ParsedQueryResult = struct {
@@ -166,11 +171,7 @@ pub fn ParsedQuery(comptime tmp_query: []const u8) type {
                             // Handles optional types
                             const typ = if (type_info_string[0] == '?') blk: {
                                 const child_type = ParseType(type_info_string[1..]);
-                                break :blk @Type(std.builtin.Type{
-                                    .optional = .{
-                                        .child = child_type,
-                                    },
-                                });
+                                break :blk ?child_type;
                             } else blk: {
                                 break :blk ParseType(type_info_string);
                             };
@@ -227,14 +228,12 @@ fn ParseType(comptime type_info: []const u8) type {
     if (mem.eql(u8, "isize", type_info)) return isize;
 
     if (type_info[0] == 'u' or type_info[0] == 'i') {
-        return @Type(std.builtin.Type{
-            .int = std.builtin.Type.Int{
-                .signedness = if (type_info[0] == 'i') .signed else .unsigned,
-                .bits = std.fmt.parseInt(usize, type_info[1..type_info.len], 10) catch {
-                    @compileError("invalid type info " ++ type_info);
-                },
+        return @Int(
+            if (type_info[0] == 'i') .signed else .unsigned,
+            std.fmt.parseInt(u16, type_info[1..type_info.len], 10) catch {
+                @compileError("invalid type info " ++ type_info);
             },
-        });
+        );
     }
 
     // Float
