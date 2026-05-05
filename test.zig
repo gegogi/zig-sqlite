@@ -44,7 +44,7 @@ fn dbMode(allocator: mem.Allocator) Db.Mode {
 
         const path = tmpDbPath(allocator) catch unreachable;
 
-        std.fs.cwd().deleteFile(path) catch {};
+        std.Io.Dir.cwd().deleteFile(path) catch {};
         break :blk .{ .File = path };
     };
 }
